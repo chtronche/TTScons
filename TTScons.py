@@ -1,5 +1,7 @@
 import os, os.path, re, time
 
+from pprint import pformat
+
 from SCons.Environment import Environment
 
 def _readConfFile():
@@ -23,7 +25,7 @@ def _parseBoardsTxt(variant='teensy31'):
 _extractRe = re.compile(r'{([^}]*)}')
 _purifyRe = re.compile(r' (-o|-c|"{source_file}"|"{object_file}"|{object_files})( |$)')
 
-_linkNotMapped = frozenset('"{build.path}/{archive_file}" "-L{build.path}" {build.flags.libs} {object_files}'.split())
+#_linkNotMapped = frozenset('"{build.path}/{archive_file}" "-L{build.path}" {build.flags.libs} {object_files}'.split())
 
 class _PlatformTxtParser:
 
@@ -32,13 +34,14 @@ class _PlatformTxtParser:
         d['runtime.ide.path'] = _arduinoDir
         d['includes'] = '' # Not using the rules here, scons will take care of it
         d['build.path'] = '.' # Still in dev
-        d['archive_file'] = 'XXX'
+        d['archive_file'] = 'build/lib/libcore.a'
         d['extra.time.local'] = '%d' % time.time()
         d['build.core.path'] = os.path.join(_arduinoDir, 'hardware/teensy/avr/cores/teensy3')
         d['build.project_name'] = target
         d['build.elfpatch'] = 'BUILD.ELFPATCH'
         d['sketch_path'] = 'SKETCH_PATH'
         d['cmd.path'] = 'CMD.PATH'
+        d['object_files'] = '$SOURCE'
         
         # highly inefficient (o^2), but hell
         for k, v in options.iteritems():
@@ -54,7 +57,6 @@ class _PlatformTxtParser:
     # parse(self, rule) is the default method, basically, it performs
     # the variable substitution inside the rule
     # _parse_<rulename> can be used to override the default method.
-
 
     def parse(self, rule, purify=True):
         if purify:
@@ -72,11 +74,14 @@ class _PlatformTxtParser:
                 self.d[rule[m.start(1):m.end(1)]],
                 rule[m.end(0):])
 
+    def full_parse(self, rule): return self.parse(rule, False)
+    _parse_recipe_c_combine_pattern = full_parse
+
     def _post_version(self):
         self.d['runtime.ide.version'] = self.d['version'].replace('.', '0') # Don't ask
 
-    def _parse_recipe_c_combine_pattern(self, line):
-        return self.parse(' '.join((_ for _ in line.split() if not _ in _linkNotMapped)), False)
+    # def _parse_recipe_c_combine_pattern(self, line):
+    #     return self.parse(' '.join((_ for _ in line.split() if not _ in _linkNotMapped)), False)
 
 def _parsePlatformTxt(boardsTxt, options, target):
     parser = _PlatformTxtParser(boardsTxt, options, target)
@@ -110,11 +115,9 @@ def _setEnv(env, boardsTxt, platformTxt):
     env['ASFLAGS'] = platformTxt['build.flags.S']
     print 'LINKCOM=', env['LINKCOM']
     env['LINKCOM'] = platformTxt['recipe.c.combine.pattern']
-    print '30>>', env['LINKCOM']
-    #env['SOURCES'] = 
 
 _defaultOptions = {
-    'speed': '72',
+    'speed': '96opt',
     'usb': 'serial',
     'keys': 'en-us',
 }
@@ -143,4 +146,8 @@ def teensy31(target, userOptions={}, env=Environment()):
                 if not _.endswith('h')]
     env.Library('build/lib/core', coreList)
     env.VariantDir('build/code', '.')
-    env.Program('build/code/' + target +'.elf', ['build/lib/libcore.a'])
+    o = env.Object('build/code/' + target +'.o', [target + '.cpp'])
+    elf = env.Command(target + '.elf', [o, 'build/lib/libcore.a'], platformTxt['recipe.c.combine.pattern'])
+    eep = env.Command(target + '.eep', elf, platformTxt['recipe.objcopy.eep.pattern'])
+    hex_ = env.Command(target + '.hex', eep, platformTxt['recipe.objcopy.hex.pattern'])
+    
